@@ -1231,14 +1231,26 @@
           if (driveLink) L.push("File PDF SPJ: " + driveLink);
           return L.join("\n");
         }
-        function openWaChat(text) {
-          var a = document.createElement("a");
-          a.href = "https://wa.me/" + WA_NUMBER + "?text=" + encodeURIComponent(text);
-          a.target = "_blank";
-          a.rel = "noopener";
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
+        function waChatUrl(text) {
+          return "https://wa.me/" + WA_NUMBER + "?text=" + encodeURIComponent(text);
+        }
+        /* Arahkan tab yang sudah dibuka secara sinkron saat tombol diklik
+           ke chat WhatsApp. Mengembalikan false bila tab tidak ada / sudah
+           ditutup / diblokir, supaya pemanggil tidak mengklaim WhatsApp
+           sudah dibuka. */
+        function openWaChat(text, waTab) {
+          if (waTab && !waTab.closed) {
+            try {
+              waTab.location.assign(waChatUrl(text));
+              return true;
+            } catch (e) { return false; }
+          }
+          return false;
+        }
+        function closeWaTab(waTab) {
+          if (waTab && !waTab.closed) {
+            try { waTab.close(); } catch (e) {}
+          }
         }
         function blobToBase64(blob) {
           return new Promise(function (resolve, reject) {
@@ -1253,11 +1265,20 @@
         }
         /* Cadangan terakhir: unduh PDF, lalu buka WhatsApp dengan pesan teks
            saja — pengguna melampirkan file PDF-nya manual di chat. */
-        function waFallbackDownload(r) {
+        function waFallbackDownload(r, waTab, popupBlocked) {
           r.pdf.save(r.filename);
-          openWaChat(waMessage(""));
-          setStatusSticky("Unggah ke Drive gagal — PDF sudah diunduh. WhatsApp dibuka: lampirkan file PDF-nya secara manual di chat.");
+          if (popupBlocked) {
+            setStatusSticky("WhatsApp tidak terbuka karena popup diblokir — izinkan popup untuk situs ini lalu ketuk tombol lagi.");
+            return;
+          }
+          if (openWaChat(waMessage(""), waTab)) {
+            setStatusSticky("Unggah ke Drive gagal — PDF sudah diunduh. WhatsApp dibuka: lampirkan file PDF-nya secara manual di chat.");
+          } else {
+            setStatusSticky("WhatsApp tidak terbuka karena popup diblokir — izinkan popup untuk situs ini lalu ketuk tombol lagi.");
+          }
         }
+
+        var WA_BLOCKED_MSG = "WhatsApp tidak terbuka karena popup diblokir — izinkan popup untuk situs ini lalu ketuk tombol lagi.";
 
         btnWa.addEventListener("click", function () {
           if (waBusy) return;
@@ -1271,6 +1292,13 @@
             setStatus("Pembuat PDF belum termuat — periksa koneksi internet lalu coba lagi.");
             return;
           }
+          /* Buka tab WhatsApp secara sinkron di dalam handler klik — sebelum
+             proses unggah dimulai — supaya browser tidak memblokirnya
+             sebagai popup. Tab ini nanti diarahkan ke URL wa.me setelah
+             PDF berhasil diunggah. */
+          var waTab = null;
+          try { waTab = window.open('about:blank', '_blank'); } catch (e) { waTab = null; }
+          var popupBlocked = !waTab || !!waTab.closed;
           waBusy = true;
           btnWa.disabled = true;
           function waDone() { waBusy = false; btnWa.disabled = false; }
@@ -1298,8 +1326,36 @@
               });
             }).catch(function () { return ""; }).then(function (driveLink) {
               if (driveLink) {
-                openWaChat(waMessage(driveLink));
-                setStatusSticky("WhatsApp dibuka — ketuk Kirim untuk mengirim PDF SPJ ke +62 813-5773-6536.");
+                /* Arahkan tab yang sudah dibuka sinkron tadi ke chat
+                   WhatsApp. Hanya klaim "WhatsApp dibuka" bila tab itu
+                   benar-benar ada dan berhasil diarahkan. */
+                if (!popupBlocked && openWaChat(waMessage(driveLink), waTab)) {
+                  setStatusSticky("WhatsApp dibuka — ketuk Kirim untuk mengirim PDF SPJ ke +62 813-5773-6536.");
+                  waDone();
+                  return;
+                }
+                /* Popup diblokir / tab sudah ditutup: jangan klaim WhatsApp
+                   dibuka. Tampilkan status jujur dan tetap tawarkan
+                   cadangan — menu berbagi bila tersedia, selain itu unduh
+                   PDF untuk dilampirkan manual. */
+                popupBlocked = true;
+                if (file && navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
+                  setStatusSticky(WA_BLOCKED_MSG);
+                  navigator.share({ files: [file], title: "SPJ NNS Holiday", text: waMessage(driveLink) }).then(function () {
+                    setStatusSticky(WA_BLOCKED_MSG + " PDF dibagikan lewat menu berbagi.");
+                    waDone();
+                  }, function (err) {
+                    if (err && err.name === "AbortError") {
+                      setStatusSticky(WA_BLOCKED_MSG);
+                      waDone();
+                    } else {
+                      waFallbackDownload(r, waTab, true);
+                      waDone();
+                    }
+                  });
+                  return;
+                }
+                waFallbackDownload(r, waTab, true);
                 waDone();
                 return;
               }
@@ -1307,24 +1363,31 @@
               if (file && navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
                 setStatusSticky("Unggah ke Drive gagal — membuka menu berbagi, pilih WhatsApp untuk mengirim PDF.");
                 navigator.share({ files: [file], title: "SPJ NNS Holiday", text: waMessage("") }).then(function () {
-                  setStatusSticky("PDF dibagikan lewat menu berbagi.");
+                  closeWaTab(waTab);
+                  if (popupBlocked) {
+                    setStatusSticky(WA_BLOCKED_MSG + " PDF dibagikan lewat menu berbagi.");
+                  } else {
+                    setStatusSticky("PDF dibagikan lewat menu berbagi.");
+                  }
                   waDone();
                 }, function (err) {
                   if (err && err.name === "AbortError") {
+                    closeWaTab(waTab);
                     setStatusSticky("Berbagi dibatalkan — PDF belum terkirim.");
                     waDone();
                   } else {
-                    waFallbackDownload(r);
+                    waFallbackDownload(r, waTab, popupBlocked);
                     waDone();
                   }
                 });
                 return;
               }
               /* Cadangan 2: unduh PDF + WhatsApp pesan teks. */
-              waFallbackDownload(r);
+              waFallbackDownload(r, waTab, popupBlocked);
               waDone();
             });
           }).catch(function () {
+            closeWaTab(waTab);
             waDone();
             setStatusSticky("Gagal membuat PDF — silakan coba lagi.");
           });
