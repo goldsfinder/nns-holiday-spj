@@ -955,6 +955,34 @@
               });
             }
           }).then(function (canvas) {
+            /* Cari baris terakhir yang masih berisi konten form (piksel yang
+               berbeda dari latar polos #f7f3ea). Irisan di bawah baris itu
+               hanya latar kosong — misalnya sisa padding di bawah footer —
+               jadi tidak ikut dipotong menjadi halaman tambahan. */
+            var contentH = canvas.height;
+            try {
+              var scanCtx = canvas.getContext("2d");
+              var scanData = scanCtx.getImageData(0, 0, canvas.width, canvas.height).data;
+              var bgR = 247, bgG = 243, bgB = 234, tol = 12;
+              var lastContentRow = -1;
+              scan:
+              for (var sy = canvas.height - 1; sy >= 0; sy--) {
+                var rowOff = sy * canvas.width * 4;
+                for (var sx = 0; sx < canvas.width; sx += 3) {
+                  var si = rowOff + sx * 4;
+                  if (Math.abs(scanData[si] - bgR) > tol ||
+                      Math.abs(scanData[si + 1] - bgG) > tol ||
+                      Math.abs(scanData[si + 2] - bgB) > tol) {
+                    lastContentRow = sy;
+                    break scan;
+                  }
+                }
+              }
+              if (lastContentRow >= 0) {
+                contentH = Math.min(canvas.height, lastContentRow + 1 + 24);
+              }
+            } catch (e) { /* deteksi gagal: pakai tinggi kanvas penuh */ }
+            if (!(contentH > 0)) contentH = canvas.height;
             var JsPDF = window.jspdf.jsPDF;
             var pdf = new JsPDF({ unit: "pt", format: "a4", orientation: "portrait", compress: true });
             var pageW = pdf.internal.pageSize.getWidth();
@@ -965,8 +993,8 @@
             var sliceH = Math.floor((pageH - margin * 2) * pxPerPt);
             var rendered = 0;
             var page = 0;
-            while (rendered < canvas.height) {
-              var h = Math.min(sliceH, canvas.height - rendered);
+            while (rendered < contentH) {
+              var h = Math.min(sliceH, contentH - rendered);
               var part = document.createElement("canvas");
               part.width = canvas.width;
               part.height = h;
