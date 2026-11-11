@@ -292,6 +292,8 @@
       .btn-gold:hover { background: var(--gold); color: #fff8e6; }
       .btn-ghost { background: transparent; color: var(--ink); border-color: var(--field-border); }
       .btn-ghost:hover { border-color: var(--gold); color: var(--gold-deep); }
+      .btn-wa { background: #25d366; color: #06301a; border-color: #128c4b; }
+      .btn-wa:hover { background: #1db857; }
       .btn-danger { background: transparent; color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
       .status-line { font-size: 14px; color: var(--gold-deep); font-weight: 600; align-self: center; min-height: 1.2em; }
       .btn:disabled { opacity: .55; cursor: wait; }
@@ -676,6 +678,7 @@
         <div class="actions">
           <button type="button" class="btn btn-gold" id="btnKirim">Kirim SPJ (Simpan Online)</button>
           <button type="button" class="btn btn-ghost" id="btnDownload">Unduh Ringkasan SPJ</button>
+          <button type="button" class="btn btn-wa" id="btnWhatsapp">Kirim PDF ke WhatsApp</button>
           <button type="button" class="btn btn-ghost" id="btnCopy">Salin Ringkasan</button>
           <button type="button" class="btn btn-ghost" id="btnNew" style="display:none;">Isi SPJ Baru</button>
           <button type="button" class="btn btn-danger" id="btnReset">Bersihkan Form</button>
@@ -698,6 +701,9 @@
         var form = document.getElementById("spj");
         var statusLine = document.getElementById("statusLine");
         var statusTimer = null;
+        /* Nomor WhatsApp tujuan tombol "Kirim PDF ke WhatsApp"
+           (format internasional, tanpa tanda +). Ubah di sini bila perlu. */
+        var WA_NUMBER = "6281357736536";
 
         function setStatus(msg) {
           statusLine.textContent = msg;
@@ -908,16 +914,11 @@
           return tmp.toDataURL("image/png");
         }
 
-        document.getElementById("btnDownload").addEventListener("click", function () {
-          var btn = this;
-          if (!window.html2canvas || !(window.jspdf && window.jspdf.jsPDF)) {
-            setStatus("Pembuat PDF belum termuat — periksa koneksi internet lalu coba lagi.");
-            return;
-          }
-          btn.disabled = true;
-          setStatus("Menyiapkan PDF…");
+        /* Membuat dokumen PDF SPJ (jsPDF) dari tampilan form — dipakai oleh
+           tombol Unduh dan tombol Kirim PDF ke WhatsApp. */
+        function buildSpjPdf() {
           var wrap = document.querySelector(".wrap");
-          window.html2canvas(wrap, {
+          return window.html2canvas(wrap, {
             scale: 2,
             useCORS: true,
             logging: false,
@@ -1023,7 +1024,20 @@
             }
             var fname = "SPJ-NNS-Holiday-" + (val("noSpj") || "baru") + (val("tanggal") ? "-" + val("tanggal") : "") + ".pdf";
             fname = fname.replace(/[\\/:*?"<>|]/g, "-");
-            pdf.save(fname);
+            return { pdf: pdf, filename: fname };
+          });
+        }
+
+        document.getElementById("btnDownload").addEventListener("click", function () {
+          var btn = this;
+          if (!window.html2canvas || !(window.jspdf && window.jspdf.jsPDF)) {
+            setStatus("Pembuat PDF belum termuat — periksa koneksi internet lalu coba lagi.");
+            return;
+          }
+          btn.disabled = true;
+          setStatus("Menyiapkan PDF…");
+          buildSpjPdf().then(function (r) {
+            r.pdf.save(r.filename);
             btn.disabled = false;
             setStatus("PDF SPJ diunduh.");
           }).catch(function () {
@@ -1197,6 +1211,122 @@
             kirimBusy = false;
             btnKirim.disabled = false;
             setStatusSticky("Gagal mengirim SPJ — periksa koneksi internet lalu coba lagi. Data di form tidak berubah.");
+          });
+        });
+
+        /* ---------- kirim PDF ke WhatsApp ---------- */
+        var btnWa = document.getElementById("btnWhatsapp");
+        var waBusy = false;
+
+        function waMessage(driveLink) {
+          var tarif = moneyVal("tarif");
+          var L = [];
+          L.push("SPJ NNS Holiday");
+          L.push("No. SPJ: " + (val("noSpj") || "—"));
+          L.push("No. Unit: " + ([val("noUnit"), val("noArmada")].filter(Boolean).join(" / ") || "—"));
+          L.push("Pemesan: " + (val("pemesan") || "—"));
+          L.push("Kota Tujuan: " + (val("kotaTujuan") || "—"));
+          L.push("Tarif: " + fmtRp(tarif));
+          L.push("Sisa Tagihan: " + fmtRp(tarif - moneyVal("uangMuka")));
+          if (driveLink) L.push("File PDF SPJ: " + driveLink);
+          return L.join("\n");
+        }
+        function openWaChat(text) {
+          var a = document.createElement("a");
+          a.href = "https://wa.me/" + WA_NUMBER + "?text=" + encodeURIComponent(text);
+          a.target = "_blank";
+          a.rel = "noopener";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }
+        function blobToBase64(blob) {
+          return new Promise(function (resolve, reject) {
+            var reader = new FileReader();
+            reader.onload = function () {
+              var s = String(reader.result || "");
+              resolve(s.indexOf(",") >= 0 ? s.split(",")[1] : s);
+            };
+            reader.onerror = function () { reject(reader.error); };
+            reader.readAsDataURL(blob);
+          });
+        }
+        /* Cadangan terakhir: unduh PDF, lalu buka WhatsApp dengan pesan teks
+           saja — pengguna melampirkan file PDF-nya manual di chat. */
+        function waFallbackDownload(r) {
+          r.pdf.save(r.filename);
+          openWaChat(waMessage(""));
+          setStatusSticky("Unggah ke Drive gagal — PDF sudah diunduh. WhatsApp dibuka: lampirkan file PDF-nya secara manual di chat.");
+        }
+
+        btnWa.addEventListener("click", function () {
+          if (waBusy) return;
+          if (!val("noSpj")) {
+            setStatus("Isi No. SPJ dulu");
+            document.getElementById("noSpj").focus();
+            window.scrollTo({ top: 0, behavior: "smooth" });
+            return;
+          }
+          if (!window.html2canvas || !(window.jspdf && window.jspdf.jsPDF)) {
+            setStatus("Pembuat PDF belum termuat — periksa koneksi internet lalu coba lagi.");
+            return;
+          }
+          waBusy = true;
+          btnWa.disabled = true;
+          function waDone() { waBusy = false; btnWa.disabled = false; }
+          setStatusSticky("Menyiapkan PDF…");
+          buildSpjPdf().then(function (r) {
+            var blob = r.pdf.output("blob");
+            var file = null;
+            try { file = new File([blob], r.filename, { type: "application/pdf" }); } catch (e) { file = null; }
+            setStatusSticky("Mengunggah PDF…");
+            return blobToBase64(blob).then(function (b64) {
+              return fetch(BACKEND_URL, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain;charset=utf-8" },
+                body: JSON.stringify({
+                  action: "upload_pdf",
+                  filename: r.filename,
+                  pdf_base64: b64,
+                  no_spj: val("noSpj")
+                })
+              }).then(function (res) { return res.json(); }).then(function (resp) {
+                if (resp && resp.ok) {
+                  return resp.url || resp.link || resp.file_url || resp.webViewLink || "";
+                }
+                return "";
+              });
+            }).catch(function () { return ""; }).then(function (driveLink) {
+              if (driveLink) {
+                openWaChat(waMessage(driveLink));
+                setStatusSticky("WhatsApp dibuka — ketuk Kirim untuk mengirim PDF SPJ ke +62 813-5773-6536.");
+                waDone();
+                return;
+              }
+              /* Cadangan 1: bagikan file PDF lewat menu berbagi perangkat. */
+              if (file && navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
+                setStatusSticky("Unggah ke Drive gagal — membuka menu berbagi, pilih WhatsApp untuk mengirim PDF.");
+                navigator.share({ files: [file], title: "SPJ NNS Holiday", text: waMessage("") }).then(function () {
+                  setStatusSticky("PDF dibagikan lewat menu berbagi.");
+                  waDone();
+                }, function (err) {
+                  if (err && err.name === "AbortError") {
+                    setStatusSticky("Berbagi dibatalkan — PDF belum terkirim.");
+                    waDone();
+                  } else {
+                    waFallbackDownload(r);
+                    waDone();
+                  }
+                });
+                return;
+              }
+              /* Cadangan 2: unduh PDF + WhatsApp pesan teks. */
+              waFallbackDownload(r);
+              waDone();
+            });
+          }).catch(function () {
+            waDone();
+            setStatusSticky("Gagal membuat PDF — silakan coba lagi.");
           });
         });
 
