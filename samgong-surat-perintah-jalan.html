@@ -987,10 +987,24 @@
             var pdf = new JsPDF({ unit: "pt", format: "a4", orientation: "portrait", compress: true });
             var pageW = pdf.internal.pageSize.getWidth();
             var pageH = pdf.internal.pageSize.getHeight();
-            var margin = 30;
+            var margin = 20;
             var imgW = pageW - margin * 2;
+            var usableH = pageH - margin * 2;
             var pxPerPt = canvas.width / imgW;
-            var sliceH = Math.floor((pageH - margin * 2) * pxPerPt);
+            var sliceH = Math.floor(usableH * pxPerPt);
+            /* Aturan pengaman: PDF maksimal 2 halaman A4. Bila tinggi konten
+               setelah pemangkasan masih melebihi 2 halaman, perkecil skala
+               render secukupnya (sekitar 0,95–0,98) supaya seluruh konten —
+               termasuk garis dan teks footer — pas tepat dalam 2 halaman,
+               tanpa halaman ke-3. */
+            var MAX_PAGES = 2;
+            if (contentH > sliceH * MAX_PAGES) {
+              var fitScale = (sliceH * MAX_PAGES) / contentH;
+              imgW = imgW * fitScale;
+              pxPerPt = canvas.width / imgW;
+              sliceH = Math.ceil(contentH / MAX_PAGES);
+            }
+            var imgX = (pageW - imgW) / 2;
             var rendered = 0;
             var page = 0;
             while (rendered < contentH) {
@@ -1003,7 +1017,7 @@
               pctx.fillRect(0, 0, part.width, part.height);
               pctx.drawImage(canvas, 0, rendered, canvas.width, h, 0, 0, canvas.width, h);
               if (page > 0) pdf.addPage();
-              pdf.addImage(part.toDataURL("image/jpeg", 0.92), "JPEG", margin, margin, imgW, h / pxPerPt);
+              pdf.addImage(part.toDataURL("image/jpeg", 0.92), "JPEG", imgX, margin, imgW, h / pxPerPt);
               rendered += h;
               page++;
             }
